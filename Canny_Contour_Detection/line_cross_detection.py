@@ -37,7 +37,6 @@ while True:
 
             vertices = len(approx)
 
-            # 🔷 SHAPE DETECTION
             if vertices == 3:
                 shape = "Triangle"
 
@@ -60,7 +59,6 @@ while True:
             else:
                 shape = "Unknown"
 
-            # 🔥 LINE CROSSING + COUNT
             if abs(cy - line_y) < 10:
                 if shape in counts:
                     counts[shape] += 1
@@ -72,10 +70,8 @@ while True:
             cv2.drawContours(frame, [approx], -1, (0,255,0), 2)
             cv2.circle(frame, (cx, cy), 5, (0,0,255), -1)
 
-    # 🔴 DRAW LINE
     cv2.line(frame, (0, line_y), (640, line_y), (0,0,255), 2)
 
-    # 📊 DISPLAY COUNTS
     offset = 30
     for shape_name, count in counts.items():
         text = f"{shape_name}: {count}"
