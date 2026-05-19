@@ -1,12 +1,25 @@
 import cv2
 import math
+import numpy as np
+
+# ---------------- CAMERA ----------------
 
 cap = cv2.VideoCapture(0)
 
-# Camera resolution
+# Optional camera resolution
 
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+
+# ---------------- TRACKING ----------------
+
+tracked_objects = {}
+
+object_id = 0
+
+# ---------------- COUNTING LINE ----------------
+
+line_y = 150
 
 # ---------------- SHAPE COUNTS ----------------
 
@@ -17,17 +30,7 @@ counts = {
     "Circle": 0
 }
 
-# ---------------- TRACKER ----------------
-
-tracked_objects = {}
-
-object_id = 0
-
-# ---------------- COUNTING LINE ----------------
-
-line_y = 150
-
-# ----------------------------------------------
+# ======================================================
 
 while True:
 
@@ -42,195 +45,335 @@ while True:
 
     # -------------------------------------
 
-    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    # -------- GRAYSCALE --------
 
-    blur = cv2.GaussianBlur(gray, (5,5), 0)
+    gray = cv2.cvtColor(
+        roi,
+        cv2.COLOR_BGR2GRAY
+    )
+
+    # -------- BLUR --------
+
+    blur = cv2.GaussianBlur(
+        gray,
+        (3,3),
+        0
+    )
+
+    # -------- THRESHOLD --------
 
     _, thresh = cv2.threshold(
         blur,
-        120,
+        0,
         255,
-        cv2.THRESH_BINARY_INV
+        cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
     )
 
-    # ---------------- CONTOURS ----------------
+    # -------- MORPHOLOGY --------
 
-    contours, _ = cv2.findContours(
+    kernel = np.ones((3,3), np.uint8)
+
+    opening = cv2.morphologyEx(
         thresh,
-        cv2.RETR_EXTERNAL,
-        cv2.CHAIN_APPROX_SIMPLE
+        cv2.MORPH_OPEN,
+        kernel,
+        iterations=1
     )
 
-    # ------------------------------------------
+    # -------- SURE BACKGROUND --------
+
+    sure_bg = cv2.dilate(
+        opening,
+        kernel,
+        iterations=1
+    )
+
+    # -------- DISTANCE TRANSFORM --------
+
+    dist_transform = cv2.distanceTransform(
+        opening,
+        cv2.DIST_L2,
+        5
+    )
+
+    # -------- DISPLAY DISTANCE MAP --------
+
+    dist_display = cv2.normalize(
+        dist_transform,
+        None,
+        0,
+        255,
+        cv2.NORM_MINMAX
+    )
+
+    dist_display = np.uint8(dist_display)
+
+    # -------- SURE FOREGROUND --------
+
+    _, sure_fg = cv2.threshold(
+        dist_transform,
+        0.2 * dist_transform.max(),
+        255,
+        0
+    )
+
+    sure_fg = np.uint8(sure_fg)
+
+    # -------- UNKNOWN REGION --------
+
+    unknown = cv2.subtract(
+        sure_bg,
+        sure_fg
+    )
+
+    # -------- CONNECTED COMPONENTS --------
+
+    _, markers = cv2.connectedComponents(
+        sure_fg
+    )
+
+    markers = markers + 1
+
+    markers[unknown == 255] = 0
+
+    # -------- WATERSHED --------
+
+    markers = cv2.watershed(
+        roi,
+        markers
+    )
+
+    # -------- DRAW BOUNDARY --------
+
+    roi[markers == -1] = [0,0,255]
+
+    # ======================================================
 
     current_objects = {}
 
-    for cnt in contours:
+    # -------- EXTRACT SEPARATED OBJECTS --------
 
-        area = cv2.contourArea(cnt)
+    unique_labels = np.unique(markers)
 
-        if area > 1000:
+    for label in unique_labels:
 
-            # Perimeter
+        # Ignore background and boundary
 
-            peri = cv2.arcLength(cnt, True)
+        if label == 1 or label == -1:
+            continue
 
-            # Polygon approximation
+        # -------- CREATE MASK --------
 
-            approx = cv2.approxPolyDP(
-                cnt,
-                0.02 * peri,
-                True
-            )
+        mask = np.zeros(
+            gray.shape,
+            dtype=np.uint8
+        )
 
-            vertices = len(approx)
+        mask[markers == label] = 255
 
-            # Bounding box
+        # -------- FIND CONTOURS --------
 
-            x, y, w, h = cv2.boundingRect(approx)
+        contours, _ = cv2.findContours(
+            mask,
+            cv2.RETR_EXTERNAL,
+            cv2.CHAIN_APPROX_SIMPLE
+        )
 
-            # Center point
+        for cnt in contours:
 
-            cx = int(x + w/2)
-            cy = int(y + h/2)
+            area = cv2.contourArea(cnt)
 
-            # ---------------- SHAPE DETECTION ----------------
+            # Ignore tiny noise
 
-            shape = "Unknown"
+            if area > 500:
 
-            if vertices == 3:
+                # -------- POLYGON APPROX --------
 
-                shape = "Triangle"
-
-            elif vertices == 4:
-
-                ratio = w / float(h)
-
-                if 0.95 <= ratio <= 1.05:
-
-                    shape = "Square"
-
-                else:
-
-                    shape = "Rectangle"
-
-            elif vertices > 6:
-
-                shape = "Circle"
-
-            # -------------------------------------------------
-
-            matched = False
-
-            current_id = -1
-
-            # ---------------- TRACKING ----------------
-
-            for id, obj in tracked_objects.items():
-
-                px, py = obj["center"]
-
-                distance = math.sqrt(
-                    (cx - px)**2 +
-                    (cy - py)**2
+                peri = cv2.arcLength(
+                    cnt,
+                    True
                 )
 
-                if distance < 40:
+                approx = cv2.approxPolyDP(
+                    cnt,
+                    0.02 * peri,
+                    True
+                )
 
-                    current_objects[id] = {
+                vertices = len(approx)
+
+                # -------- BOUNDING BOX --------
+
+                x, y, w, h = cv2.boundingRect(
+                    approx
+                )
+
+                # -------- CENTER POINT --------
+
+                cx = int(x + w/2)
+                cy = int(y + h/2)
+
+                # ======================================================
+                # SHAPE DETECTION
+                # ======================================================
+
+                shape = "Unknown"
+
+                if vertices == 3:
+
+                    shape = "Triangle"
+
+                elif vertices == 4:
+
+                    ratio = w / float(h)
+
+                    if 0.95 <= ratio <= 1.05:
+
+                        shape = "Square"
+
+                    else:
+
+                        shape = "Rectangle"
+
+                elif vertices > 6:
+
+                    shape = "Circle"
+
+                # ======================================================
+                # TRACKING
+                # ======================================================
+
+                matched = False
+
+                current_id = -1
+
+                for id, obj in tracked_objects.items():
+
+                    px, py = obj["center"]
+
+                    distance = math.sqrt(
+                        (cx - px)**2 +
+                        (cy - py)**2
+                    )
+
+                    # Same object condition
+
+                    if distance < 40:
+
+                        current_id = id
+
+                        matched = True
+
+                        current_objects[id] = {
+
+                            "center": (cx, cy),
+
+                            "counted": obj["counted"],
+
+                            "missed": 0
+                        }
+
+                        # -------- LINE CROSSING --------
+
+                        if (
+                            py < line_y and
+                            cy >= line_y and
+                            obj["counted"] == False
+                        ):
+
+                            if shape in counts:
+
+                                counts[shape] += 1
+
+                            current_objects[id]["counted"] = True
+
+                        break
+
+                # -------- NEW OBJECT --------
+
+                if matched == False:
+
+                    object_id += 1
+
+                    current_id = object_id
+
+                    current_objects[current_id] = {
 
                         "center": (cx, cy),
-                        "shape": shape,
-                        "counted": obj["counted"]
+
+                        "counted": False,
+
+                        "missed": 0
                     }
 
-                    current_id = id
+                # ======================================================
+                # DRAWING
+                # ======================================================
 
-                    matched = True
+                # Draw contour
 
-                    # ---------------- LINE CROSSING ----------------
+                cv2.drawContours(
+                    roi,
+                    [approx],
+                    -1,
+                    (0,255,0),
+                    2
+                )
 
-                    if (
-                        py < line_y and
-                        cy >= line_y and
-                        obj["counted"] == False
-                    ):
+                # Draw rectangle
 
-                        if shape in counts:
+                cv2.rectangle(
+                    roi,
+                    (x,y),
+                    (x+w,y+h),
+                    (255,0,0),
+                    2
+                )
 
-                            counts[shape] += 1
+                # Draw center point
 
-                        current_objects[id]["counted"] = True
+                cv2.circle(
+                    roi,
+                    (cx, cy),
+                    5,
+                    (0,0,255),
+                    -1
+                )
 
-                    break
+                # Draw shape + ID
 
-            # ---------------- NEW OBJECT ----------------
+                cv2.putText(
+                    roi,
+                    f"{shape} ID:{current_id}",
+                    (x, y-10),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (255,255,0),
+                    2
+                )
+    # -------- HANDLE MISSING OBJECTS --------
 
-            if matched == False:
+    for id, obj in tracked_objects.items():
 
-                object_id += 1
+        if id not in current_objects:
 
-                current_id = object_id
+            obj["missed"] += 1
 
-                current_objects[current_id] = {
+            # Keep object temporarily
 
-                    "center": (cx, cy),
-                    "shape": shape,
-                    "counted": False
+            if obj["missed"] < 8:
 
-                }
-
-            # ------------------------------------------------
-
-            # Draw contour
-
-            cv2.drawContours(
-                roi,
-                [approx],
-                -1,
-                (0,255,0),
-                2
-            )
-
-            # Draw rectangle
-
-            cv2.rectangle(
-                roi,
-                (x,y),
-                (x+w, y+h),
-                (255,0,0),
-                2
-            )
-
-            # Draw center
-
-            cv2.circle(
-                roi,
-                (cx, cy),
-                5,
-                (0,0,255),
-                -1
-            )
-
-            # Display shape + ID
-
-            cv2.putText(
-                roi,
-                f"{shape} ID:{current_id}",
-                (x, y-10),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (255,255,0),
-                2
-            )
-
-    # ---------------- UPDATE TRACKER ----------------
+                current_objects[id] = obj
+            
+    # ======================================================
+    # UPDATE TRACKER
+    # ======================================================
 
     tracked_objects = current_objects
 
-    # ------------------------------------------------
-
-    # Draw counting line
+    # ======================================================
+    # DRAW COUNTING LINE
+    # ======================================================
 
     cv2.line(
         roi,
@@ -240,7 +383,9 @@ while True:
         2
     )
 
-    # ---------------- DISPLAY COUNTS ----------------
+    # ======================================================
+    # DISPLAY COUNTS
+    # ======================================================
 
     y_offset = 30
 
@@ -258,9 +403,9 @@ while True:
 
         y_offset += 30
 
-    # ------------------------------------------------
-
-    # Draw ROI rectangle
+    # ======================================================
+    # DRAW ROI RECTANGLE
+    # ======================================================
 
     cv2.rectangle(
         frame,
@@ -270,16 +415,31 @@ while True:
         2
     )
 
-    # Show windows
+    # ======================================================
+    # SHOW WINDOWS
+    # ======================================================
 
     cv2.imshow("ROI", roi)
 
     cv2.imshow("Threshold", thresh)
 
-    cv2.imshow("Frame", frame)
+    cv2.imshow("Opening", opening)
 
-    if cv2.waitKey(1) == 27:
+    cv2.imshow("Distance Transform", dist_display)
+
+    cv2.imshow("Sure FG", sure_fg)
+
+    cv2.imshow("Unknown Region", unknown)
+
+    cv2.imshow("Full Frame", frame)
+
+    # ======================================================
+
+    if cv2.waitKey(1) & 0xFF == ord("q"):
         break
 
+# ======================================================
+
 cap.release()
+
 cv2.destroyAllWindows()

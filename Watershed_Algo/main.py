@@ -66,6 +66,21 @@ while True:
 
     #----------------------------------------
 
+    # #_________Distance_Transform_Normalize__________#
+
+    # dist_display = cv2.normalize(
+    # dist_transform,
+    # None,
+    # 0,
+    # 255,
+    # cv2.NORM_MINMAX
+    # )
+
+    # dist_display = np.uint8(dist_display)
+
+    # #----------------------------------------
+
+
     #___________Sure Foreground___________#
 
     _, sure_fg = cv2.threshold(
@@ -114,33 +129,152 @@ while True:
     roi[markers == -1] = [0, 0, 255]
 
     #--------------------------------------------
+
+
+    # ---------------- EXTRACT OBJECTS ----------------
+
+    for label in np.unique(markers):
+
+        # Ignore background and boundary
+
+        if label == 1 or label == -1:
+            continue
+
+        # Create mask
+
+        mask = np.zeros(gray.shape, dtype="uint8")
+
+        mask[markers == label] = 255
+
+        # Find contours of separated object
+
+        contours, _ = cv2.findContours(
+            mask,
+            cv2.RETR_EXTERNAL,
+            cv2.CHAIN_APPROX_SIMPLE
+        )
+
+        for cnt in contours:
+
+            area = cv2.contourArea(cnt)
+
+            if area > 500:
+
+                # Polygon approximation
+
+                peri = cv2.arcLength(cnt, True)
+
+                approx = cv2.approxPolyDP(
+                    cnt,
+                    0.02 * peri,
+                    True
+                )
+
+                vertices = len(approx)
+
+                # Bounding box
+
+                x, y, w, h = cv2.boundingRect(approx)
+
+                # Center point
+
+                cx = int(x + w/2)
+                cy = int(y + h/2)
+
+                # ---------------- SHAPE DETECTION ----------------
+
+                shape = "Unknown"
+
+                if vertices == 3:
+
+                    shape = "Triangle"
+
+                elif vertices == 4:
+
+                    ratio = w / float(h)
+
+                    if 0.95 <= ratio <= 1.05:
+
+                        shape = "Square"
+
+                    else:
+
+                        shape = "Rectangle"
+
+                elif vertices > 6:
+
+                    shape = "Circle"
+
+                # -------------------------------------------------
+
+                # Draw contour
+
+                cv2.drawContours(
+                    roi,
+                    [approx],
+                    -1,
+                    (0,255,0),
+                    2
+                )
+
+                # Draw rectangle
+
+                cv2.rectangle(
+                    roi,
+                    (x,y),
+                    (x+w,y+h),
+                    (255,0,0),
+                    2
+                )
+
+                # Draw center
+
+                cv2.circle(
+                    roi,
+                    (cx, cy),
+                    5,
+                    (0,0,255),
+                    -1
+                )
+
+                # Display shape
+
+                cv2.putText(
+                    roi,
+                    shape,
+                    (x, y-10),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (255,255,0),
+                    2
+                )
     
-    # ---------------- finding the final objects CONTOURS ----------------
+    ## ---------------- finding the final objects CONTOURS ----------------
 
-    contours, _ = cv2.findContours(
-        sure_fg,
-        cv2.RETR_EXTERNAL,
-        cv2.CHAIN_APPROX_SIMPLE
-    )
+    # contours, _ = cv2.findContours(
+    #     sure_fg,
+    #     cv2.RETR_EXTERNAL,
+    #     cv2.CHAIN_APPROX_SIMPLE
+    # )
 
-    # ------------------------------------------
+    # # ------------------------------------------
 
 
-    for cnt in contours:
+    # for cnt in contours:
 
-        area = cv2.contourArea(cnt)
+    #     area = cv2.contourArea(cnt)
 
-        if area > 500:
+    #     if area > 500:
 
-            x,y,w,h = cv2.boundingRect(cnt)
+    #         x,y,w,h = cv2.boundingRect(cnt)
 
-            cv2.rectangle(
-                roi,
-                (x,y),
-                (x+w,y+h),
-                (255,0,0),
-                2
-            )
+    #         cv2.rectangle(
+    #             roi,
+    #             (x,y),
+    #             (x+w,y+h),
+    #             (255,0,0),
+    #             2
+    #         )
 
     #-----------------------------------------------
 
@@ -152,6 +286,7 @@ while True:
     cv2.imshow("Distance Transform", dist_transform / dist_transform.max())
     cv2.imshow("Sure FG", sure_fg)
     cv2.imshow("Unknown", unknown)
+    # cv2.imshow("Distance", dist_display)
 
     
     cv2.imshow("Full Frame", frame)
